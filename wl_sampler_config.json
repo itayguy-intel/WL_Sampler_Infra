@@ -1,0 +1,23 @@
+{
+	"Target.IsConnectedTimeoutSec": 3,
+	"Target.DefaultPeer2PeerIP": "192.168.137.5",
+	"target_dir": "C:\\Users\\Administrator\\Desktop\\wl_sampler_target_data",
+	"host_dir": "C:\\Users\\mvhlab\\Desktop\\wl_sampler_host_data",
+	"emon_output_filename": "emon_raw_data.txt",
+	"emon_cmd_params": {
+		"setup_cmd": "C:\\Program Files (x86)\\IntelSWTools\\sep_private_5.26_win_05250602a139d66\\sep_vars_for_wl_sampler.cmd",
+		"emon_cmd": "emon -c",
+		"l": 0,
+		"t": 0.015, 
+		"C": "INST_RETIRED.ANY, CPU_CLK_UNHALTED.THREAD, CPU_CLK_UNHALTED.REF_TSC, TOPDOWN.SLOTS:perf_metrics,IDQ.DSB_UOPS:u0x2C,DTLB_LOAD_MISSES.WALK_PENDING,L1D.REPLACEMENT,L2_RQSTS.REFERENCES,FP_ARITH_DISPATCHED.PORT_0:u0x43,UOPS_DISPATCHED.PORT_2_3_10,UOPS_EXECUTED.CORE"
+	},
+	"thermapy_output_filename": "thermapy_raw_data.csv",
+	"thermapy_ip_target": "core0_t0",
+	"thermapy_launching_duration": 60,
+	"thermapy_lab_code_path": "D:\\ThermaPy\\lab",
+	"alignment_exe_dir": "C:\\wl_sampler_alignment",
+	"alignment_exe_cmd": "wl_sampler_alignment.exe",
+	"wl_dir": "C:\\Program Files\\UL\\PCMark 10",
+	"wl_cmd": "PCMark10Cmd.exe --definition=pcm10_express.pcmdef",
+	"wl_duration": 30
+}
