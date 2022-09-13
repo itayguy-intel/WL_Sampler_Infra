@@ -3,6 +3,7 @@ import os
 import time
 import signal
 from  multiprocess import Process
+import subprocess
 from datetime import datetime
 import pickle as pkl
 import json
@@ -13,17 +14,7 @@ import pprint
 from evtar.services.communicator.ux import Communicator, CommunicatorConfig
 
 
-
-# def ctrl_c_binding():
-    # def handler(signum, frame):
-        # res = input("Ctrl-c was pressed. Do you really want to exit? y/n ")
-        # if res == 'y':
-            # exit(1)
-
-    # signal.signal(signal.SIGINT, handler)
-
-
-def thermapy_func_wrapper(ip, duration, output_path, app_flow_path, resolution, launch_path):
+def thermapy_func_wrapper(ip, duration, output_path, app_flow_path, resolution):
     import __main__
     import sys
     import time
@@ -36,13 +27,10 @@ def thermapy_func_wrapper(ip, duration, output_path, app_flow_path, resolution, 
         cpu = __main__.cpu
     else:
         cpu = __main__.cpu
-    # with open(launch_path, 'w+') as f:
-        # pass
-    print('$$ Finish launch pythonsv$$')
+
     import application_collection as appf
     time_func = lambda: time.time() * resolution
-    print('Finish improt appf')
-    # cannot receive lambda function from outside...
+    # cannot receive lambda function from outside.
     appf.collect_application_dts_time_freq(ip=ip, duration=duration, output_path=output_path, time_func=time_func)
 
         
@@ -67,9 +55,9 @@ def enable_emon(emon_cmd_params, emon_target_output_path):
     return command_pid
     
 
-def enable_thermapy(ip, raw_data_path, data_collection_duration, launching_duration, lab_path, resolution, launch_path):
+def enable_thermapy(ip, raw_data_path, data_collection_duration, launching_duration, lab_path, resolution):
     thermapy_app_flow_path = os.path.join(lab_path, r'flows\application')
-    thermapy_process = Process(target=thermapy_func_wrapper, kwargs={'ip': ip, 'duration': data_collection_duration, 'output_path': raw_data_path, 'app_flow_path': thermapy_app_flow_path, 'resolution': args.resolution, 'launch_path': launch_path})
+    thermapy_process = Process(target=thermapy_func_wrapper, kwargs={'ip': ip, 'duration': data_collection_duration, 'output_path': raw_data_path, 'app_flow_path': thermapy_app_flow_path, 'resolution': args.resolution})
     thermapy_process.start()
     print(f'Thermapy PID: ', thermapy_process.pid)
     time.sleep(launching_duration)
@@ -84,14 +72,6 @@ def thermapy_post_processing(lab_path, raw_data_path, parsed_output_file):
     parsed_df = pd.read_csv(parsed_output_file)
     parsed_df.to_csv(parsed_output_file, index=False)
     return parsed_df
-
-# daq align in function
-# time.sleep(1)
-    # try:
-        # Communicator.ExecuteCommandOnTarget(command=align_cmd, sCommandCwd=align_dir)
-    # except:
-        # pass
-    # time.sleep(1)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='.')
@@ -117,12 +97,9 @@ if __name__ == '__main__':
     # Create output dir in host
     if not os.path.isdir(host_dir):
         os.mkdir(host_dir)
-    
-    
-    thermapy_launch_path = os.path.join(host_dir, 'thermpy_launch.txt')
+
     ip = cfg.get('thermapy_ip_target')
     data_collection_duration = None
-    #data_collection_duration = cfg.get('thermapy_data_collection_duration') * args.resolution
     thermapy_launching_duration = cfg.get('thermapy_launching_duration')
     thermapy_lab_path = cfg.get('thermapy_lab_code_path')
     thermapy_output_filename = cfg.get('thermapy_output_filename')
@@ -131,6 +108,9 @@ if __name__ == '__main__':
     wl_duration = cfg.get('wl_duration')
     align_dir = cfg.get('alignment_exe_dir')
     align_cmd = cfg.get('alignment_exe_cmd')
+    speed_cmd = cfg.get('speed_cmd')
+    speed_combine_script = cfg.get('speed_combine_script')
+    speed_output_filename = cfg.get('speed_output_filename')
     
     CommunicatorConfig.Target.IsConnectedTimeoutSec = cfg.get('Target.IsConnectedTimeoutSec')
     CommunicatorConfig.Target.DefaultPeer2PeerIP = cfg.get('Target.DefaultPeer2PeerIP')
@@ -144,31 +124,22 @@ if __name__ == '__main__':
     # Enabling Emon
     emon_target_output_path = os.path.join(target_dir, emon_output_filename)
     emon_pid = enable_emon(emon_cmd_params=emon_cmd_params, emon_target_output_path=emon_target_output_path)
- 
+
     # Run Thermapy - launch PythonSV and then start collecting data
     thermapy_raw_data_path = os.path.join(host_dir, thermapy_output_filename)
-    thermapy_process = enable_thermapy(ip, thermapy_raw_data_path, data_collection_duration, thermapy_launching_duration, thermapy_lab_path, args.resolution, thermapy_launch_path)
-    # todo hack:  need to leave time for daq align at the end
-    #daq_t1 = time.time()
+    thermapy_process = enable_thermapy(ip, thermapy_raw_data_path, data_collection_duration, thermapy_launching_duration, thermapy_lab_path, args.resolution)
+	# DAQ Align
     time.sleep(1)
     try:
         Communicator.ExecuteCommandOnTarget(command=align_cmd, sCommandCwd=align_dir)
     except:
         pass
     time.sleep(1)
+	
     # Run WL
-    # wl_cmd = f"timeout 1; timeout 1; {wl_cmd}"
     wl_pid = Communicator.ExecuteCommandOnTargetAsync(command=wl_cmd, bOrphan=False, sCommandCwd=wl_dir)
     wl_start_time = time.time()
     print(f"WL PID={wl_pid}")
-    print(thermapy_process.is_alive())
-    # Keep running thermapy as long as workload running
-    # while thermapy_process.is_alive() and time.time() - daq_t1 <= 40:
-        # try:
-            # res = Communicator.ExecuteCommandOnTarget(f'tasklist | find "{wl_pid}"', logOutput=False) 
-        # except:
-            # break
-            
     while True:
         try:
             res = Communicator.ExecuteCommandOnTarget(f'tasklist | find "{wl_pid}"', logOutput=False) 
@@ -179,22 +150,23 @@ if __name__ == '__main__':
             
     Communicator.KillCommandOnTarget(pid=str(wl_pid))
     print('Terminating WL...')
+	# DAQ Align
     time.sleep(1)
     try:
         Communicator.ExecuteCommandOnTarget(command=align_cmd, sCommandCwd=align_dir)
     except:
         pass
+		
     time.sleep(1)
     thermapy_process.kill()
     print('Terminating Thermapy...')
     time.sleep(1)
     thermapy_process.join()
-    # os.remove(thermapy_launch_path)
-    print(f'File was removed? {os.path.isfile(thermapy_launch_path)}')
     
     Communicator.KillCommandOnTarget(pid=str(emon_pid))
     print('Terminating Emon...')
     time.sleep(1)
+	
     if Communicator.IsFile(path=emon_target_output_path):
         print(f"Emon created a trace file of size: {Communicator.GetFileSize(sFilePath=emon_target_output_path)}")
         
@@ -209,5 +181,10 @@ if __name__ == '__main__':
     # Parsing Thermapy raw data
     thermapy_parsed_output_file = os.path.join(host_dir, f'parsed_{thermapy_output_filename}')
     thermapy_post_processing(thermapy_lab_path, thermapy_raw_data_path, thermapy_parsed_output_file)
+    
+    # Speed combine
+    speed_output_path = os.path.join(host_dir, speed_output_filename)
+    cmd_list = [speed_cmd, 'run', speed_combine_script, '--emon-file', emon_host_output_path, '--thermalpy-file', thermapy_parsed_output_file, '--output-file', speed_output_path]
+    speed_output = subprocess.run(cmd_list, shell=False)
     print("Finished.")
     
