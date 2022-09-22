@@ -11,8 +11,10 @@ import sys
 import pandas as pd
 import argparse
 import pprint
+import shutil
 from evtar.services.communicator.ux import Communicator, CommunicatorConfig
 
+DEFAULT_CFG_PATH = r'C:\SVSHARE\WL_Sampler_Infra\wl_sampler_config.json'
 
 def thermapy_func_wrapper(ip, duration, output_path, app_flow_path, resolution):
     import __main__
@@ -21,8 +23,8 @@ def thermapy_func_wrapper(ip, duration, output_path, app_flow_path, resolution):
     sys.path.append(app_flow_path)
     if "cpu" not in __main__.__dict__.keys():
 
-        from alderlake import startadl_adp
-        startadl_adp.main()
+        from raptorlake import startrpl_rpp
+        startrpl_rpp.main()
 
         cpu = __main__.cpu
     else:
@@ -46,6 +48,14 @@ def init_common_time(communicator_obj, resolution, time_func):
     base_epoch_time = (formatted_time - datetime(1970, 1, 1)).total_seconds() * resolution + penalty_time
     return base_epoch_time, t2
     
+    
+def enable_nidaq(nidaq_script_dir, nidaq_calibration_file):
+    sys.path.append(r"C:\Intel\DAQ Controller")
+    sys.path.append(nidaq_script_dir)
+    import DAQ 
+    daq = DAQ.DAQ(nidaq_calibration_file)
+    daq.record()
+    return daq
     
 def enable_emon(emon_cmd_params, emon_target_output_path):
     command = '\"{setup_cmd}\" && {emon_cmd} -l{l} -t{t} -C \"{C}\" -f {f} -V'.format(**emon_cmd_params, f=emon_target_output_path)
@@ -75,11 +85,11 @@ def thermapy_post_processing(lab_path, raw_data_path, parsed_output_file):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='.')
-    parser.add_argument('--cfg_path', type=str, required=False, default=r'C:\SVSHARE\WL_Sampler_Infra\wl_sampler_config.json', help='.')
+    parser.add_argument('--cfg_path', type=str, required=False, default=DEFAULT_CFG_PATH, help='.')
     parser.add_argument('--resolution', type=int, required=False, default=1000, help='.')
     args = parser.parse_args()
 
-
+    
     time_func = lambda: time.time() * args.resolution
     # read json config
     with open(args.cfg_path) as f:
@@ -88,7 +98,9 @@ if __name__ == '__main__':
     pp = pprint.PrettyPrinter(indent=4)
     print(f"Input Configurations from: {args.cfg_path}")
     print(pp.pprint(cfg))
-
+    
+ 
+    # base_epoch_time, t2 = init_common_time(Communicator, resolution=args.resolution, time_func=time_func)
     # Extracts configurations from static file
     emon_output_filename = cfg.get('emon_output_filename')
     emon_cmd_params = cfg.get('emon_cmd_params')
@@ -111,6 +123,16 @@ if __name__ == '__main__':
     speed_cmd = cfg.get('speed_cmd')
     speed_combine_script = cfg.get('speed_combine_script')
     speed_output_filename = cfg.get('speed_output_filename')
+    nidaq_script_dir = cfg.get('nidaq_script_dir')
+    nidaq_calibration_file = cfg.get('nidaq_calibration_file')
+    nidaq_output_file = cfg.get('nidaq_output_file')
+    
+    # ###
+    # speed_output_path = os.path.join(host_dir, speed_output_filename)
+    # cmd_list = [speed_cmd, 'run', speed_combine_script, '--emon-file', r'C:\Users\mvhlab\Desktop\wl_sampler_host_data\emon_raw_data.txt, '--thermalpy-file', r"C:\Users\mvhlab\Desktop\wl_sampler_host_data\parsed_thermapy_raw_data.csv", '--output-file', r"C:\Users\mvhlab\Desktop\wl_sampler_host_data\out.csv"]
+    # speed_output = subprocess.run(cmd_list, shell=False)
+    # raise ValueError()
+    # ###
     
     CommunicatorConfig.Target.IsConnectedTimeoutSec = cfg.get('Target.IsConnectedTimeoutSec')
     CommunicatorConfig.Target.DefaultPeer2PeerIP = cfg.get('Target.DefaultPeer2PeerIP')
@@ -119,7 +141,9 @@ if __name__ == '__main__':
     # Create output dir in target
     Communicator.ExecuteCommandOnTarget(command=f'mkdir {target_dir}')
     
-    base_epoch_time, t2 = init_common_time(Communicator, resolution=args.resolution, time_func=time_func)
+  
+    # Enabling nidaq
+    daq = enable_nidaq(nidaq_script_dir=nidaq_script_dir, nidaq_calibration_file=nidaq_calibration_file)
   
     # Enabling Emon
     emon_target_output_path = os.path.join(target_dir, emon_output_filename)
@@ -166,6 +190,10 @@ if __name__ == '__main__':
     Communicator.KillCommandOnTarget(pid=str(emon_pid))
     print('Terminating Emon...')
     time.sleep(1)
+    
+    daq.stop_record()
+    print('Terminating NIDAQ')
+    time.sleep(1)
 	
     if Communicator.IsFile(path=emon_target_output_path):
         print(f"Emon created a trace file of size: {Communicator.GetFileSize(sFilePath=emon_target_output_path)}")
@@ -182,9 +210,13 @@ if __name__ == '__main__':
     thermapy_parsed_output_file = os.path.join(host_dir, f'parsed_{thermapy_output_filename}')
     thermapy_post_processing(thermapy_lab_path, thermapy_raw_data_path, thermapy_parsed_output_file)
     
+    # Move daq output to host location
+    host_nidaq_output_file = os.path.join(host_dir, os.path.basename(nidaq_output_file))
+    shutil.copyfile(nidaq_output_file, host_nidaq_output_file)
+    
     # Speed combine
-    speed_output_path = os.path.join(host_dir, speed_output_filename)
-    cmd_list = [speed_cmd, 'run', speed_combine_script, '--emon-file', emon_host_output_path, '--thermalpy-file', thermapy_parsed_output_file, '--output-file', speed_output_path]
-    speed_output = subprocess.run(cmd_list, shell=False)
+    # speed_output_path = os.path.join(host_dir, speed_output_filename)
+    # cmd_list = [speed_cmd, 'run', speed_combine_script, '--emon-file', emon_host_output_path, '--thermalpy-file', thermapy_parsed_output_file, '--output-file', speed_output_path]
+    # speed_output = subprocess.run(cmd_list, shell=False)
     print("Finished.")
     

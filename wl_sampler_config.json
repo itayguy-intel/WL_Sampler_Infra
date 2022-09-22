@@ -22,5 +22,8 @@
 	"wl_duration": 60,
 	"speed_cmd": "C:\\Program Files\\SPEED\\speed.exe",
 	"speed_combine_script": "C:\\SVSHARE\\WL_Sampler_Infra\\thermapy_emon_combine.py",
-	"speed_output_filename": "speed_output.csv"
+	"speed_output_filename": "speed_output.csv",
+	"nidaq_script_dir": "C:\\pythonsv\\raptorlake\\users\\corepnp",
+	"nidaq_calibration_file": "C:\\Users\\mvhlab\\Desktop\\calibration\\RPL-S_Nidaq_GGRP142000FY_core_1000s.xml",
+	"nidaq_output_file": "D:\\temp\\NiDaq.csv"
 }
