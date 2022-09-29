@@ -53,6 +53,7 @@ def _parse_command_line(argv):
 
 
 def _load_traces(emon_file, thermalpy_file):
+	# This code fixes the EMON
     with open(emon_file, 'r') as in_file:
         with open(r'C:\Temp\emon.txt', 'w') as out_file:
             next_line = False
@@ -74,7 +75,8 @@ def _load_traces(emon_file, thermalpy_file):
     thermalpy_trace = pandas.read_csv(thermalpy_file)
     thermalpy_trace.set_index('Frame', inplace=True)
     thermalpy_trace.reset_index(inplace=True)
-    thermalpy_trace['Time'] /= 1000
+	# Convert the Time column from MS to SEC
+    # thermalpy_trace['Time'] /= 1000
     thermalpy_trace.set_index('Time', inplace=True)
     return emon_trace, thermalpy_trace
 
@@ -175,11 +177,16 @@ def align(emon_file, thermalpy_file, output_file):
     report = Report('EMON-Thermalpy alignment health')
     emon_trace, thermalpy_trace = _load_traces(emon_file=emon_file, thermalpy_file=thermalpy_file)
 
-    emon_trace.data['Duration'] = emon_trace.data[('package0', 'bigcore', 'CPU0', 'CPU_CLK_UNHALTED.REF_TSC')] / (
-            2419.20 * 1000000)
-    emon_trace.data['Frequency0'] = emon_trace.data[
-                                        ('package0', 'bigcore', 'CPU0', 'CPU_CLK_UNHALTED.THREAD')] / emon_trace.data[
-                                        'Duration'] / 1e6
+    for core_type in ['bigcore', 'core', 'atom']:
+        try:
+            emon_trace.data['Duration'] = emon_trace.data[
+                                              ('package0', core_type, 'CPU0', 'CPU_CLK_UNHALTED.REF_TSC')] / (
+                                                  2419.20 * 1000000)
+            emon_trace.data['Frequency0'] = emon_trace.data[
+                                                ('package0', core_type, 'CPU0', 'CPU_CLK_UNHALTED.THREAD')] / \
+                                            emon_trace.data['Duration'] / 1e6
+        except:
+            pass
 
     thermalpy_freq_data = thermalpy_trace['Frequency[MHz]'].copy()
     emon_freq_data = emon_trace.data['Frequency0'].copy()
