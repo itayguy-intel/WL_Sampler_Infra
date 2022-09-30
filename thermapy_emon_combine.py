@@ -181,7 +181,7 @@ def align(emon_file, thermalpy_file, output_file):
         try:
             emon_trace.data['Duration'] = emon_trace.data[
                                               ('package0', core_type, 'CPU0', 'CPU_CLK_UNHALTED.REF_TSC')] / (
-                                                  2419.20 * 1000000)
+                                                  2995.20 * 1000000)
             emon_trace.data['Frequency0'] = emon_trace.data[
                                                 ('package0', core_type, 'CPU0', 'CPU_CLK_UNHALTED.THREAD')] / \
                                             emon_trace.data['Duration'] / 1e6

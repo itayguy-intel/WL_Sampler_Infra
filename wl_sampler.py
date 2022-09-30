@@ -86,7 +86,7 @@ def thermapy_post_processing(lab_path, raw_data_path, parsed_output_file):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='.')
     parser.add_argument('--cfg_path', type=str, required=False, default=DEFAULT_CFG_PATH, help='.')
-    parser.add_argument('--resolution', type=int, required=False, default=1000, help='.')
+    parser.add_argument('--resolution', type=int, required=False, default=1, help='.')
     args = parser.parse_args()
 
     
@@ -215,8 +215,9 @@ if __name__ == '__main__':
     shutil.copyfile(nidaq_output_file, host_nidaq_output_file)
     
     # Speed combine
-    # speed_output_path = os.path.join(host_dir, speed_output_filename)
-    # cmd_list = [speed_cmd, 'run', speed_combine_script, '--emon-file', emon_host_output_path, '--thermalpy-file', thermapy_parsed_output_file, '--output-file', speed_output_path]
-    # speed_output = subprocess.run(cmd_list, shell=False)
+    speed_output_path = os.path.join(host_dir, speed_output_filename)
+    cmd_list = [speed_cmd, 'run', speed_combine_script, '--emon-file', emon_host_output_path, '--thermalpy-file', thermapy_parsed_output_file, '--output-file', speed_output_path]
+    print(cmd_list)
+    speed_output = subprocess.run(cmd_list, shell=False)
     print("Finished.")
     
