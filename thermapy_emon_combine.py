@@ -46,14 +46,15 @@ def _parse_command_line(argv):
     parser.add_argument("--emon-file", "-e", help="Path to emon CSV data file (generated from EMON "
                                                   "with -V switch)", required=True)
     parser.add_argument("--thermalpy-file", "-t", help="Path to thermalpy trace file", required=True)
+    parser.add_argument("--daq-file", "-d", help="Path to DAQ CSV trace file", required=False)
     parser.add_argument("--output-file", "-o", help="Path to output CSV file", required=True)
 
     # add your arguments here
     return parser.parse_args(args=argv)
 
 
-def _load_traces(emon_file, thermalpy_file):
-	# This code fixes the EMON
+def _load_traces(emon_file, thermalpy_file, daq_file):
+    # This code fixes the EMON
     with open(emon_file, 'r') as in_file:
         with open(r'C:\Temp\emon.txt', 'w') as out_file:
             next_line = False
@@ -75,10 +76,16 @@ def _load_traces(emon_file, thermalpy_file):
     thermalpy_trace = pandas.read_csv(thermalpy_file)
     thermalpy_trace.set_index('Frame', inplace=True)
     thermalpy_trace.reset_index(inplace=True)
-	# Convert the Time column from MS to SEC
-    # thermalpy_trace['Time'] /= 1000
+    # Convert the Time column from MS to SEC
+    thermalpy_trace['Time'] /= 1000
     thermalpy_trace.set_index('Time', inplace=True)
-    return emon_trace, thermalpy_trace
+
+    daq_trace = None
+    if daq_file is not None:
+        daq_trace = pandas.read_csv(daq_file)
+        daq_trace.set_index('TimeStamp', inplace=True)
+
+    return emon_trace, thermalpy_trace, daq_trace
 
 
 def step_resample(series: pandas.Series, period: float, mode='after') -> pandas.Series:
@@ -164,85 +171,20 @@ def find_pattern(signal, pattern):
     return numpy.argmax(numpy.correlate(signal, pattern, mode='full')) - pattern.shape[0] + 1
 
 
-def align(emon_file, thermalpy_file, output_file):
+def _resample_thermalpy(emon_df, thermalpy_df):
     """
-    Aligns EMON csv file and thermalpy trace. The DAQAlign.exe software should be executed before and after the
-    workload. It generates the output to the given output file
-
-    :param emon_file: Path to EMON CSV file generated from EMON with -V switch
-    :param thermalpy_file: path to file generated using thermalpy tool
+    Resamples Thermalpy trace based on EMON samples.
+    :return: the thermalpy data frame resamples by the given emon index
     """
-    SIZE_HINT = 'wide'
-
-    report = Report('EMON-Thermalpy alignment health')
-    emon_trace, thermalpy_trace = _load_traces(emon_file=emon_file, thermalpy_file=thermalpy_file)
-
-    for core_type in ['bigcore', 'core', 'atom']:
-        try:
-            emon_trace.data['Duration'] = emon_trace.data[
-                                              ('package0', core_type, 'CPU0', 'CPU_CLK_UNHALTED.REF_TSC')] / (
-                                                  2995.20 * 1000000)
-            emon_trace.data['Frequency0'] = emon_trace.data[
-                                                ('package0', core_type, 'CPU0', 'CPU_CLK_UNHALTED.THREAD')] / \
-                                            emon_trace.data['Duration'] / 1e6
-        except:
-            pass
-
-    thermalpy_freq_data = thermalpy_trace['Frequency[MHz]'].copy()
-    emon_freq_data = emon_trace.data['Frequency0'].copy()
-    initial_state_section = Section('Initial',
-                                    ChartGroup(
-                                        ScatterChart('EMON CPU0 frequency', ScatterDataSeries(
-                                            x=emon_freq_data.index, y=emon_freq_data, step=True,
-                                            color='black'), sizehint=SIZE_HINT, markers=False),
-                                        ScatterChart('ThermalPy CPU0 frequency', ScatterDataSeries(
-                                            x=thermalpy_freq_data.index,
-                                            y=thermalpy_freq_data, step=True, color='blue'),
-                                                     sizehint=SIZE_HINT),
-                                    ))
-    report.append(initial_state_section)
-
-    duration_diff = emon_trace.data.index[-1] - thermalpy_trace.index[-1]
-    emon_df = emon_trace.data
-    emon_df = emon_df.loc[[x for x in emon_df.index if x >= duration_diff]]
-
-    emon_df = emon_df[emon_df.columns[2:]]
-    emon_df.index -= emon_df.index[0]
-
-    thermalpy_freq_data = thermalpy_trace['Frequency[MHz]'].copy()
-    sampling_period = numpy.diff(thermalpy_freq_data.index).mean()
-    pattern = normalize(
-        step_resample(
-            emon_df['Frequency0'],
-            sampling_period
-        ).values
-    )
-    offset = find_pattern(signal=thermalpy_freq_data, pattern=pattern)
-    emon_df.index += thermalpy_freq_data.index[offset]
-
-    alignment_state_section = Section('Alignment',
-                                      ChartGroup(
-                                          ScatterChart('EMON CPU0 frequency', ScatterDataSeries(
-                                              x=emon_df['Frequency0'].index, y=emon_df['Frequency0'], step=True,
-                                              color='black'), sizehint=SIZE_HINT),
-                                          ScatterChart('ThermalPy CPU0 frequency', ScatterDataSeries(
-                                              x=thermalpy_trace['Frequency[MHz]'].index,
-                                              y=thermalpy_trace['Frequency[MHz]'], step=True, color='blue'),
-                                                       sizehint=SIZE_HINT),
-                                      ))
-    report.append(alignment_state_section)
-
-    # Combine the traces
-    emon_df.index = numpy.round(emon_df.index, 6)
-    thermalpy_trace.index = numpy.round(thermalpy_trace.index, 6)
-
     emon_ranges = list(zip(emon_df.index[:-1], emon_df.index[1:]))
+
+    # Create new thermalpy index
     new_thermalpy_index_col = []
     emon_range_index = 0
     thermalpy_row_index = 0
-    while thermalpy_row_index < thermalpy_trace.shape[0]:
+    while thermalpy_row_index < thermalpy_df.shape[0]:
         left, right = emon_ranges[emon_range_index]
-        value = thermalpy_trace.index.values[thermalpy_row_index]
+        value = thermalpy_df.index.values[thermalpy_row_index]
         if value <= left:
             new_thermalpy_index_col.append(left)
             thermalpy_row_index += 1
@@ -255,20 +197,176 @@ def align(emon_file, thermalpy_file, output_file):
 
         emon_range_index += 1
 
-    thermalpy_trace.index = new_thermalpy_index_col
-    thermalpy_trace.index.name = 'Time'
-    mean_columns = [c for c in thermalpy_trace.columns if is_mean_column(c)]
-    grouped_thermalpy_trace_mean = thermalpy_trace[mean_columns].groupby('Time').mean().copy()
+    thermalpy_df.index = new_thermalpy_index_col
+    thermalpy_df.index.name = 'Time'
+    mean_columns = [c for c in thermalpy_df.columns if is_mean_column(c)]
+    grouped_thermalpy_trace_mean = thermalpy_df[mean_columns].groupby('Time').mean().copy()
     grouped_thermalpy_trace_mean = grouped_thermalpy_trace_mean.iloc[1:]
 
-    sum_columns = [c for c in thermalpy_trace.columns if is_sum_column(c)]
-    grouped_thermalpy_trace_sum = thermalpy_trace[sum_columns].groupby('Time').sum().copy()
+    sum_columns = [c for c in thermalpy_df.columns if is_sum_column(c)]
+    grouped_thermalpy_trace_sum = thermalpy_df[sum_columns].groupby('Time').sum().copy()
     grouped_thermalpy_trace_sum = grouped_thermalpy_trace_sum.iloc[1:]
 
-    emon_df = emon_df.loc[[x for x in emon_df.index if grouped_thermalpy_trace_mean.index[
-        0] <= x <= grouped_thermalpy_trace_mean.index[-1]]]
+    return pandas.concat([grouped_thermalpy_trace_mean, grouped_thermalpy_trace_sum], axis=1)
+
+
+def _resample_daq(emon_df, daq_df):
+    """
+    Resamples NiDAQ trace based on EMON samples.
+    :return: the NiDAQ data frame resamples by the given emon index
+    """
+    emon_ranges = list(zip(emon_df.index[:-1], emon_df.index[1:]))
+
+    # Create new daq index
+    new_daq_index_col = []
+    emon_range_index = 0
+    daq_row_index = 0
+    while daq_row_index < daq_df.shape[0] and emon_range_index < len(emon_ranges):
+        left, right = emon_ranges[emon_range_index]
+        value = daq_df.index.values[daq_row_index]
+        if value <= left:
+            new_daq_index_col.append(left)
+            daq_row_index += 1
+            continue
+
+        if value <= right:
+            new_daq_index_col.append(right)
+            daq_row_index += 1
+            continue
+
+        emon_range_index += 1
+
+    daq_df = daq_df.iloc[:len(new_daq_index_col)]
+    daq_df.index = new_daq_index_col
+    daq_df.index.name = 'Time'
+    mean_columns = daq_df.columns
+    grouped_daq_trace_mean = daq_df[mean_columns].groupby('Time').mean().copy()
+    grouped_daq_trace_mean = grouped_daq_trace_mean.iloc[1:]
+
+    return grouped_daq_trace_mean
+
+
+def align(emon_file, thermalpy_file, daq_file, output_file):
+    """
+    Aligns EMON csv file and thermalpy trace. The DAQAlign.exe software should be executed before and after the
+    workload. It generates the output to the given output file
+
+    :param emon_file: Path to EMON CSV file generated from EMON with -V switch
+    :param thermalpy_file: path to file generated using thermalpy tool
+    """
+    SIZE_HINT = 'wide'
+
+    report = Report('EMON-Thermalpy alignment health')
+    emon_trace, thermalpy_trace, daq_trace = _load_traces(
+        emon_file=emon_file, thermalpy_file=thermalpy_file, daq_file=daq_file)
+
+    for core_type in ['bigcore', 'core', 'atom']:
+        try:
+            emon_trace.data['Duration'] = emon_trace.data[
+                                              ('package0', core_type, 'CPU0', 'CPU_CLK_UNHALTED.REF_TSC')] / (
+                                              emon_trace.tsc_freq)
+            emon_trace.data['Frequency0'] = emon_trace.data[
+                                                ('package0', core_type, 'CPU0', 'CPU_CLK_UNHALTED.THREAD')] / \
+                                            emon_trace.data['Duration'] / 1e6
+        except:
+            pass
+
+    thermalpy_freq_data = thermalpy_trace['Frequency[MHz]'].copy()
+    emon_freq_data = emon_trace.data['Frequency0'].copy()
+    charts = [
+        ScatterChart('EMON CPU0 frequency', ScatterDataSeries(
+            x=emon_freq_data.index, y=emon_freq_data, step=True,
+            color='black'), sizehint=SIZE_HINT, markers=False),
+        ScatterChart('ThermalPy CPU0 frequency', ScatterDataSeries(
+            x=thermalpy_freq_data.index,
+            y=thermalpy_freq_data, step=True, color='blue'),
+                     sizehint=SIZE_HINT, markers=False)
+    ]
+    if daq_trace is not None:
+        daq_power_data = daq_trace['P_IA']
+        charts.insert(1,
+                      ScatterChart('DAQ IA Power', ScatterDataSeries(
+                          x=daq_trace.index, y=daq_power_data, step=True,
+                          color='green'), sizehint=SIZE_HINT, markers=False))
+    initial_state_section = Section('Initial',
+                                    ChartGroup(*charts))
+    report.append(initial_state_section)
+
+    duration_diff = emon_trace.data.index[-1] - thermalpy_trace.index[-1]
+    emon_df = emon_trace.data
+    emon_df = emon_df.loc[[x for x in emon_df.index if x >= duration_diff]]
+
+    emon_df = emon_df[emon_df.columns[2:]]
+    emon_df.index -= emon_df.index[0]
+
+    if daq_trace is not None:
+        duration_diff = daq_trace.index[-1] - thermalpy_trace.index[-1]
+        daq_trace = daq_trace.loc[[x for x in daq_trace.index if x >= duration_diff]]
+        daq_trace.index -= daq_trace.index[0]
+
+    thermalpy_freq_data = thermalpy_trace['Frequency[MHz]'].copy()
+    sampling_period = numpy.diff(thermalpy_freq_data.index).mean()
+    pattern = normalize(
+        step_resample(
+            emon_df['Frequency0'],
+            sampling_period
+        ).values
+    )
+    offset = find_pattern(signal=thermalpy_freq_data, pattern=pattern)
+    emon_df.index += thermalpy_freq_data.index[offset]
+
+    if daq_trace is not None:
+        pattern = normalize(
+            step_resample(
+                daq_trace['P_IA'],
+                sampling_period
+            ).values
+        )
+        offset = find_pattern(signal=thermalpy_freq_data, pattern=pattern)
+        daq_trace.index += thermalpy_freq_data.index[offset]
+
+    charts = [
+        ScatterChart('EMON CPU0 frequency', ScatterDataSeries(
+            x=emon_df['Frequency0'].index, y=emon_df['Frequency0'], step=True,
+            color='black'), sizehint=SIZE_HINT, markers=False),
+        ScatterChart('ThermalPy CPU0 frequency', ScatterDataSeries(
+            x=thermalpy_trace['Frequency[MHz]'].index,
+            y=thermalpy_trace['Frequency[MHz]'], step=True, color='blue'),
+                     sizehint=SIZE_HINT, markers=False)
+    ]
+    if daq_trace is not None:
+        charts.insert(1,
+                      ScatterChart('DAQ IA Power', ScatterDataSeries(
+                          x=daq_trace['P_IA'].index, y=daq_trace['P_IA'], step=True,
+                          color='green'), sizehint=SIZE_HINT, markers=False))
+
+    alignment_state_section = Section('Alignment',
+                                      ChartGroup(*charts))
+    report.append(alignment_state_section)
+
+    # Combine the traces
+    emon_df.index = numpy.round(emon_df.index, 6)
+    thermalpy_trace.index = numpy.round(thermalpy_trace.index, 6)
+    if daq_trace is not None:
+        daq_trace.index = numpy.round(daq_trace.index, 6)
+
+    thermalpy_resampled = _resample_thermalpy(emon_df=emon_df, thermalpy_df=thermalpy_trace)
+
+    daq_resampled = None
+    if daq_trace is not None:
+        daq_resampled = _resample_daq(emon_df=emon_df, daq_df=daq_trace)
+
+    emon_df = emon_df.loc[
+        [x for x in emon_df.index if thermalpy_resampled.index[0] <= x <= thermalpy_resampled.index[-1]]]
+
+    if daq_trace is not None:
+        emon_df = emon_df.loc[
+            [x for x in emon_df.index if daq_resampled.index[0] <= x <= daq_resampled.index[-1]]]
+
     emon_df = emon_df.drop([('Duration', '', '', '')], axis=1)
-    combined_df = pandas.concat([emon_df, grouped_thermalpy_trace_mean, grouped_thermalpy_trace_sum], axis=1)
+    concat_dfs = [emon_df, thermalpy_resampled, daq_resampled] if daq_trace is not None else [emon_df,
+                                                                                              thermalpy_resampled]
+    combined_df = pandas.concat(concat_dfs, axis=1)
     new_cols = []
     for column in combined_df.columns:
         if isinstance(column, tuple):
@@ -279,16 +377,22 @@ def align(emon_file, thermalpy_file, output_file):
     combined_df = combined_df[combined_df['Frequency[MHz]'].notnull()]
     combined_df.columns = [c.replace('---', '') for c in combined_df.columns]
 
+    charts = [
+        ScatterChart('EMON CPU0 frequency', ScatterDataSeries(
+            x=combined_df['Frequency0'].index, y=combined_df['Frequency0'],
+            step=True, color='black'), sizehint=SIZE_HINT, markers=False),
+        ScatterChart('ThermalPy CPU0 frequency', ScatterDataSeries(
+            x=combined_df['Frequency[MHz]'].index,
+            y=combined_df['Frequency[MHz]'], step=True, color='blue'),
+                     sizehint=SIZE_HINT, markers=False)
+    ]
+    if daq_trace is not None:
+        charts.insert(1,
+                      ScatterChart('DAQ IA Power', ScatterDataSeries(
+                          x=combined_df['P_IA'].index, y=combined_df['P_IA'],
+                          step=True, color='green'), sizehint=SIZE_HINT, markers=False))
     combined_state_section = Section('Combined',
-                                     ChartGroup(
-                                         ScatterChart('EMON CPU0 frequency', ScatterDataSeries(
-                                             x=combined_df['Frequency0'].index, y=combined_df['Frequency0'],
-                                             step=True, color='black'), sizehint=SIZE_HINT),
-                                         ScatterChart('ThermalPy CPU0 frequency', ScatterDataSeries(
-                                             x=combined_df['Frequency[MHz]'].index,
-                                             y=combined_df['Frequency[MHz]'], step=True, color='blue'),
-                                                      sizehint=SIZE_HINT),
-                                     ))
+                                     ChartGroup(*charts))
     report.append(combined_state_section)
 
     width = int(0.9 / combined_df.index.to_frame().diff().mean())
@@ -298,39 +402,55 @@ def align(emon_file, thermalpy_file, output_file):
     left_peak_ts = series.index[peaks[0]] + 14
     right_peak_ts = series.index[peaks[-1]] - 14
 
+    charts = [
+        ScatterChart('EMON CPU0 frequency',
+                     ScatterDataSeries(
+                         x=combined_df['Frequency0'].index, y=combined_df['Frequency0'],
+                         step=True, color='black'),
+                     ScatterDataSeries(
+                         x=[left_peak_ts, left_peak_ts], y=[0, series.max()],
+                         color='red'),
+                     ScatterDataSeries(
+                         x=[right_peak_ts, right_peak_ts], y=[0, series.max()],
+                         color='red'), sizehint=SIZE_HINT, markers=False
+                     ),
+        ScatterChart('ThermalPy CPU0 frequency', ScatterDataSeries(
+            x=combined_df['Frequency[MHz]'].index,
+            y=combined_df['Frequency[MHz]'], step=True, color='blue'),
+                     sizehint=SIZE_HINT, markers=False)
+    ]
+    if daq_trace is not None:
+        charts.insert(1,
+                      ScatterChart('DAQ IA Power',
+                                   ScatterDataSeries(
+                                       x=combined_df['P_IA'].index, y=combined_df['P_IA'],
+                                       step=True, color='green'), sizehint=SIZE_HINT, markers=False
+                                   ))
+
     chopped_state_section = Section('Chopped',
-                                    ChartGroup(
-                                        ScatterChart('EMON CPU0 frequency',
-                                                     ScatterDataSeries(
-                                                         x=combined_df['Frequency0'].index, y=combined_df['Frequency0'],
-                                                         step=True, color='black'),
-                                                     ScatterDataSeries(
-                                                         x=[left_peak_ts, left_peak_ts], y=[0, series.max()],
-                                                         color='red'),
-                                                     ScatterDataSeries(
-                                                         x=[right_peak_ts, right_peak_ts], y=[0, series.max()],
-                                                         color='red'), sizehint=SIZE_HINT
-                                                     ),
-                                        ScatterChart('ThermalPy CPU0 frequency', ScatterDataSeries(
-                                            x=combined_df['Frequency[MHz]'].index,
-                                            y=combined_df['Frequency[MHz]'], step=True, color='blue'),
-                                                     sizehint=SIZE_HINT),
-                                    ))
+                                    ChartGroup(*charts))
     report.append(chopped_state_section)
 
     combined_df = combined_df.loc[[x for x in combined_df.index if left_peak_ts <= x <= right_peak_ts]]
     combined_df.index.name = 'Time[sec]'
     combined_df.index -= combined_df.index[0]
+
+    charts = [
+        ScatterChart('EMON CPU0 frequency', ScatterDataSeries(
+            x=combined_df['Frequency0'].index, y=combined_df['Frequency0'],
+            step=True, color='black'), sizehint=SIZE_HINT, markers=False),
+        ScatterChart('ThermalPy CPU0 frequency', ScatterDataSeries(
+            x=combined_df['Frequency[MHz]'].index,
+            y=combined_df['Frequency[MHz]'], step=True, color='blue'),
+                     sizehint=SIZE_HINT, markers=False)
+    ]
+    if daq_trace is not None:
+        charts.insert(1,
+                      ScatterChart('DAQ IA Power', ScatterDataSeries(
+                          x=combined_df['P_IA'].index, y=combined_df['P_IA'],
+                          step=True, color='green'), sizehint=SIZE_HINT, markers=False))
     final_state_section = Section('Final',
-                                  ChartGroup(
-                                      ScatterChart('EMON CPU0 frequency', ScatterDataSeries(
-                                          x=combined_df['Frequency0'].index, y=combined_df['Frequency0'],
-                                          step=True, color='black'), sizehint=SIZE_HINT),
-                                      ScatterChart('ThermalPy CPU0 frequency', ScatterDataSeries(
-                                          x=combined_df['Frequency[MHz]'].index,
-                                          y=combined_df['Frequency[MHz]'], step=True, color='blue'),
-                                                   sizehint=SIZE_HINT),
-                                  ))
+                                  ChartGroup(*charts))
     report.append(final_state_section)
 
     if not output_file.endswith('.csv'):
@@ -347,7 +467,8 @@ def align(emon_file, thermalpy_file, output_file):
 def main(argv):
     args = _parse_command_line(argv=argv)
 
-    align(emon_file=args.emon_file, thermalpy_file=args.thermalpy_file, output_file=args.output_file)
+    align(emon_file=args.emon_file, thermalpy_file=args.thermalpy_file, daq_file=args.daq_file,
+          output_file=args.output_file)
     return 0
 
 
