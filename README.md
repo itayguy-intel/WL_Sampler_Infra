@@ -1,5 +1,5 @@
 # WL Sampler Infra
-Software infrastructure for sampling emons and temperature during WL run
+Software infrastructure for sampling temperature, counters and power[W] during WL application run
 
 ## Initial Frequncy View of the Traces
 ![image](https://user-images.githubusercontent.com/95685493/188594049-f90ef36f-aa2a-4eab-99a9-7028018737e5.png)
